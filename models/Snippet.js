@@ -4,17 +4,17 @@ const snippetSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: true,
+      required: [true, "Please provide a snippet name"],
       trim: true,
     },
     language: {
       type: String,
-      required: true,
+      default: "javascript",
       trim: true,
     },
     code: {
       type: String,
-      required: true,
+      default: "", // Make it optional with empty default
     },
     description: {
       type: String,

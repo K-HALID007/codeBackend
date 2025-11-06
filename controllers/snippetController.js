@@ -81,17 +81,24 @@ export const getSnippet = async (req, res, next) => {
 // @access  Public
 export const createSnippet = async (req, res, next) => {
   try {
-    const { name, language, code, description, tags } = req.body;
+    const {
+      name,
+      language = "javascript",
+      code = "",
+      description = "",
+      tags = [],
+    } = req.body;
 
-    if (!name || !language || !code) {
+    // Only name is required
+    if (!name || !name.trim()) {
       return res.status(400).json({
         success: false,
-        message: "Please provide name, language, and code",
+        message: "Please provide snippet name",
       });
     }
 
     const snippet = await Snippet.create({
-      name,
+      name: name.trim(),
       language,
       code,
       description,
@@ -126,7 +133,7 @@ export const updateSnippet = async (req, res, next) => {
 
     snippet.name = name || snippet.name;
     snippet.language = language || snippet.language;
-    snippet.code = code || snippet.code;
+    snippet.code = code !== undefined ? code : snippet.code;
     snippet.description =
       description !== undefined ? description : snippet.description;
     snippet.tags = tags || snippet.tags;
