@@ -7,6 +7,7 @@ import {
   deleteSnippet,
   getSnippetsByLanguage,
   getAllLanguages,
+  renameFolder,
 } from "../controllers/snippetController.js";
 
 const router = express.Router();
@@ -19,6 +20,9 @@ router.get("/languages/all", getAllLanguages);
 
 // Get snippets by language
 router.get("/language/:language", getSnippetsByLanguage);
+
+// Rename folder
+router.put("/folder/rename", renameFolder);
 
 // Single snippet operations
 router.route("/:id").get(getSnippet).put(updateSnippet).delete(deleteSnippet);

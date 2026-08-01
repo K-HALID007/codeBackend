@@ -16,7 +16,7 @@ const server = http.createServer(app);
 const corsOptions = {
   origin: process.env.CLIENT_URL || "http://localhost:3000",
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 200,
 };
@@ -30,69 +30,132 @@ const io = new Server(server, {
   cors: {
     origin: process.env.CLIENT_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
+    credentials: true,
   },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  connectTimeout: 45000,
 });
 
-// Store active users
-const activeUsers = new Set();
+// Store active users with their info
+const activeUsers = new Map();
 
-// Socket.IO event handlers
-io.on("connection", (socket) => {
-  activeUsers.add(socket.id);
-  console.log(`⚡ User connected: ${socket.id} | Active: ${activeUsers.size}`);
-
-  // Emit to all connected clients that a user joined
-  io.emit("user-count", activeUsers.size);
-
-  // When snippet is created
-  socket.on("create-snippet", (data) => {
-    console.log("✨ New snippet created:", data.name);
-    socket.broadcast.emit("snippet-created", data);
-  });
-
-  // When snippet is updated
-  socket.on("update-snippet", (data) => {
-    console.log("🔄 Snippet updated:", data._id);
-    socket.broadcast.emit("snippet-updated", data);
-  });
-
-  // When snippet is deleted
-  socket.on("delete-snippet", (snippetId) => {
-    console.log("🗑️ Snippet deleted:", snippetId);
-    socket.broadcast.emit("snippet-deleted", snippetId);
-  });
-
-  socket.on("disconnect", () => {
-    activeUsers.delete(socket.id);
-    console.log(
-      `❌ User disconnected: ${socket.id} | Active: ${activeUsers.size}`
-    );
-    io.emit("user-count", activeUsers.size);
-  });
-});
-
+// Make io accessible to routes
 app.set("io", io);
 
+// 🔥 CRITICAL: Middleware to emit Socket.IO events after REST API operations
+// This ensures real-time updates happen automatically
+app.use(
+  "/api/snippets",
+  (req, res, next) => {
+    // Store the original json method
+    const originalJson = res.json.bind(res);
+
+    // Override json method to emit socket events after response is sent
+    res.json = function (data) {
+      // Get the io instance
+      const io = req.app.get("io");
+
+      // Emit events based on the request method and response status
+      if (data.isFolderRename) {
+        console.log("📂 Auto-emitting folder-renamed event");
+        io.emit("folder-renamed", data.data);
+      } else if (req.method === "POST" && res.statusCode === 201 && data.data) {
+        // Snippet created - broadcast to all clients
+        console.log("✨ Auto-emitting snippet-created event");
+        io.emit("snippet-created", data.data);
+      } else if (
+        (req.method === "PUT" || req.method === "PATCH") &&
+        res.statusCode === 200 &&
+        data.data
+      ) {
+        // Snippet updated - broadcast to all clients
+        console.log("🔄 Auto-emitting snippet-updated event");
+        io.emit("snippet-updated", data.data);
+      } else if (req.method === "DELETE" && res.statusCode === 200) {
+        // Snippet deleted - broadcast to all clients
+        const snippetId = req.params.id;
+        console.log("🗑️ Auto-emitting snippet-deleted event for:", snippetId);
+        io.emit("snippet-deleted", snippetId);
+      }
+
+      // Call the original json method
+      return originalJson(data);
+    };
+
+    next();
+  },
+  snippetRoutes,
+);
+
+// Socket.IO Connection Handling
+io.on("connection", (socket) => {
+  console.log(`⚡ New client connected: ${socket.id}`);
+
+  // Add user to active users
+  activeUsers.set(socket.id, {
+    id: socket.id,
+    connectedAt: new Date(),
+  });
+
+  // Emit updated user count to all clients
+  io.emit("user-count", activeUsers.size);
+
+  // Send welcome message to newly connected client
+  socket.emit("connected", {
+    userId: socket.id,
+    activeUsers: activeUsers.size,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Handle disconnection
+  socket.on("disconnect", (reason) => {
+    console.log(`❌ Client disconnected: ${socket.id} | Reason: ${reason}`);
+    activeUsers.delete(socket.id);
+    io.emit("user-count", activeUsers.size);
+  });
+
+  // Handle errors
+  socket.on("error", (error) => {
+    console.error(`Socket error for ${socket.id}:`, error.message);
+  });
+});
+
+// Development logging
 if (process.env.NODE_ENV === "development") {
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
+    const start = Date.now();
+    res.on("finish", () => {
+      const duration = Date.now() - start;
+      console.log(
+        `${req.method} ${req.path} ${res.statusCode} - ${duration}ms`,
+      );
+    });
     next();
   });
 }
 
+// Routes
 app.use("/api/snippets", snippetRoutes);
 
+// Root endpoint
 app.get("/", (req, res) => {
   res.json({
     message: "Code Snippet Manager API",
     version: "1.0.0",
+    status: "running",
     endpoints: {
       snippets: "/api/snippets",
       health: "/api/health",
     },
+    socket: {
+      active: true,
+      users: activeUsers.size,
+    },
   });
 });
 
+// Health check endpoint
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -100,9 +163,11 @@ app.get("/api/health", (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     activeUsers: activeUsers.size,
+    socketConnections: io.engine.clientsCount,
   });
 });
 
+// 404 handler
 app.use((req, res, next) => {
   res.status(404).json({
     success: false,
@@ -110,27 +175,54 @@ app.use((req, res, next) => {
   });
 });
 
+// Error handler
 app.use(errorHandler);
 
+// Start server
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════╗
-║   🚀 Server running in ${process.env.NODE_ENV} mode   ║
+║   🚀 Server running in ${(process.env.NODE_ENV || "development").padEnd(6)} mode      ║
 ║   📡 Port: ${PORT}                              ║
 ║   🌐 URL: http://localhost:${PORT}             ║
+║   🔌 Socket.IO: Enabled                       ║
+║   📊 Health: http://localhost:${PORT}/api/health ║
 ╚═══════════════════════════════════════════════╝
   `);
 });
 
+// Graceful shutdown
+const gracefulShutdown = () => {
+  console.log("\n🔄 Shutting down gracefully...");
+
+  io.close(() => {
+    console.log("🔌 Socket.IO connections closed");
+  });
+
+  server.close(() => {
+    console.log("🌐 HTTP server closed");
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error("❌ Forcefully shutting down");
+    process.exit(1);
+  }, 10000);
+};
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
+
 process.on("unhandledRejection", (err, promise) => {
   console.error(`❌ Unhandled Rejection: ${err.message}`);
-  server.close(() => process.exit(1));
+  console.error(err.stack);
 });
 
 process.on("uncaughtException", (err) => {
   console.error(`❌ Uncaught Exception: ${err.message}`);
+  console.error(err.stack);
   process.exit(1);
 });
 

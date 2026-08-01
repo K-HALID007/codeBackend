@@ -20,6 +20,10 @@ const snippetSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    folder: {
+      type: String,
+      default: "",
+    },
     tags: {
       type: [String],
       default: [],
