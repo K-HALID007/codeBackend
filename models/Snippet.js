@@ -24,6 +24,10 @@ const snippetSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    isFavorite: {
+      type: Boolean,
+      default: false,
+    },
     tags: {
       type: [String],
       default: [],

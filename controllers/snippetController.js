@@ -123,7 +123,7 @@ export const createSnippet = async (req, res, next) => {
 // @access  Public
 export const updateSnippet = async (req, res, next) => {
   try {
-    const { name, language, code, description, folder, tags } = req.body;
+    const { name, language, code, description, folder, tags, isFavorite } = req.body;
 
     let snippet = await Snippet.findById(req.params.id);
 
@@ -141,6 +141,7 @@ export const updateSnippet = async (req, res, next) => {
     if (description !== undefined) snippet.description = description;
     if (folder !== undefined) snippet.folder = folder;
     if (tags !== undefined) snippet.tags = tags;
+    if (isFavorite !== undefined) snippet.isFavorite = isFavorite;
 
     await snippet.save();
 
