@@ -185,12 +185,13 @@ export const updateSnippet = async (req, res, next) => {
     }
 
     if (isSecret !== undefined) {
-      if (isSecret && req.body.pin) {
+      const newPin = req.headers["x-pin"] || req.body.pin;
+      if (isSecret && newPin) {
         // Locking with a new pin
         const salt = await bcrypt.genSalt(10);
-        snippet.pinHash = await bcrypt.hash(req.body.pin, salt);
+        snippet.pinHash = await bcrypt.hash(newPin, salt);
         snippet.isSecret = true;
-      } else if (!isSecret) {
+      } else if (isSecret !== undefined && !isSecret) {
         // Removing secret
         snippet.pinHash = null;
         snippet.isSecret = false;
