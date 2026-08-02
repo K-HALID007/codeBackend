@@ -1,4 +1,5 @@
 import Snippet from "../models/Snippet.js";
+import bcrypt from "bcryptjs";
 
 // @desc    Get all snippets
 // @route   GET /api/snippets
@@ -37,10 +38,19 @@ export const getSnippets = async (req, res, next) => {
 
     const snippets = await Snippet.find(query).sort(sortOptions);
 
+    // Mask code for secret snippets
+    const maskedSnippets = snippets.map((s) => {
+      const obj = s.toObject();
+      if (obj.isSecret) {
+        obj.code = "🔒 LOCKED";
+      }
+      return obj;
+    });
+
     res.status(200).json({
       success: true,
-      count: snippets.length,
-      data: snippets,
+      count: maskedSnippets.length,
+      data: maskedSnippets,
     });
   } catch (error) {
     next(error);
@@ -61,9 +71,14 @@ export const getSnippet = async (req, res, next) => {
       });
     }
 
+    const snippetObj = snippet.toObject();
+    if (snippetObj.isSecret) {
+      snippetObj.code = "🔒 LOCKED";
+    }
+
     res.status(200).json({
       success: true,
-      data: snippet,
+      data: snippetObj,
     });
   } catch (error) {
     if (error.kind === "ObjectId") {
@@ -88,6 +103,8 @@ export const createSnippet = async (req, res, next) => {
       description = "",
       folder = "",
       tags = [],
+      isSecret = false,
+      pin = "",
     } = req.body;
 
     // Only name is required
@@ -105,7 +122,15 @@ export const createSnippet = async (req, res, next) => {
       description,
       folder,
       tags,
+      isSecret: isSecret || !!pin,
     });
+
+    if (pin && pin.length >= 4) {
+      const salt = await bcrypt.genSalt(10);
+      snippet.pinHash = await bcrypt.hash(pin, salt);
+      snippet.isSecret = true;
+      await snippet.save();
+    }
 
     // 🔥 This response will trigger the Socket.IO middleware
     res.status(201).json({
@@ -123,7 +148,7 @@ export const createSnippet = async (req, res, next) => {
 // @access  Public
 export const updateSnippet = async (req, res, next) => {
   try {
-    const { name, language, code, description, folder, tags, isFavorite } = req.body;
+    const { name, language, code, description, folder, tags, isFavorite, isSecret } = req.body;
 
     let snippet = await Snippet.findById(req.params.id);
 
@@ -142,6 +167,35 @@ export const updateSnippet = async (req, res, next) => {
     if (folder !== undefined) snippet.folder = folder;
     if (tags !== undefined) snippet.tags = tags;
     if (isFavorite !== undefined) snippet.isFavorite = isFavorite;
+    
+    // Toggling secret status or updating code requires PIN verification if snippet is already secret
+    if (snippet.isSecret) {
+      const isSensitiveUpdate = code !== undefined || (isSecret !== undefined && isSecret === false);
+      
+      if (isSensitiveUpdate) {
+        const pin = req.headers["x-pin"];
+        if (!pin) {
+          return res.status(401).json({ success: false, message: "PIN required to update secret snippet" });
+        }
+        const isMatch = await bcrypt.compare(pin, snippet.pinHash);
+        if (!isMatch) {
+          return res.status(401).json({ success: false, message: "Incorrect PIN" });
+        }
+      }
+    }
+
+    if (isSecret !== undefined) {
+      if (isSecret && req.body.pin) {
+        // Locking with a new pin
+        const salt = await bcrypt.genSalt(10);
+        snippet.pinHash = await bcrypt.hash(req.body.pin, salt);
+        snippet.isSecret = true;
+      } else if (!isSecret) {
+        // Removing secret
+        snippet.pinHash = null;
+        snippet.isSecret = false;
+      }
+    }
 
     await snippet.save();
 
@@ -174,6 +228,23 @@ export const deleteSnippet = async (req, res, next) => {
         success: false,
         message: "Snippet not found",
       });
+    }
+
+    if (snippet.isSecret) {
+      const pin = req.headers["x-pin"] || req.body.pin;
+      if (!pin) {
+        return res.status(401).json({
+          success: false,
+          message: "PIN required to delete secret snippet",
+        });
+      }
+      const isMatch = await bcrypt.compare(pin, snippet.pinHash);
+      if (!isMatch) {
+        return res.status(401).json({
+          success: false,
+          message: "Incorrect PIN",
+        });
+      }
     }
 
     await snippet.deleteOne();
@@ -258,6 +329,54 @@ export const renameFolder = async (req, res, next) => {
       message: `Folder renamed successfully. ${result.modifiedCount} snippets updated.`,
       data: { oldName, newName: newName.trim(), modifiedCount: result.modifiedCount },
       isFolderRename: true // Flag for socket middleware
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Verify PIN for a secret snippet
+// @route   POST /api/snippets/:id/verify-pin
+// @access  Public
+export const verifySnippetPin = async (req, res, next) => {
+  try {
+    const { pin } = req.body;
+    const snippet = await Snippet.findById(req.params.id);
+
+    if (!snippet) {
+      return res.status(404).json({
+        success: false,
+        message: "Snippet not found",
+      });
+    }
+
+    if (!snippet.isSecret) {
+      return res.status(400).json({
+        success: false,
+        message: "Snippet is not secret",
+      });
+    }
+
+    if (!pin) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a PIN",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(pin, snippet.pinHash);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect PIN",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "PIN verified successfully",
+      data: { code: snippet.code },
     });
   } catch (error) {
     next(error);

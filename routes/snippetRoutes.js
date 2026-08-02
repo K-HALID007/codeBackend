@@ -8,6 +8,7 @@ import {
   getSnippetsByLanguage,
   getAllLanguages,
   renameFolder,
+  verifySnippetPin,
 } from "../controllers/snippetController.js";
 
 const router = express.Router();
@@ -24,7 +25,14 @@ router.get("/language/:language", getSnippetsByLanguage);
 // Rename folder
 router.put("/folder/rename", renameFolder);
 
-// Single snippet operations
-router.route("/:id").get(getSnippet).put(updateSnippet).delete(deleteSnippet);
+// Snippet specific routes
+router
+  .route("/:id")
+  .get(getSnippet)
+  .put(updateSnippet)
+  .delete(deleteSnippet);
+
+// Verify PIN
+router.post("/:id/verify-pin", verifySnippetPin);
 
 export default router;

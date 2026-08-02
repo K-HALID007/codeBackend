@@ -28,6 +28,14 @@ const snippetSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isSecret: {
+      type: Boolean,
+      default: false,
+    },
+    pinHash: {
+      type: String,
+      default: null,
+    },
     tags: {
       type: [String],
       default: [],
